@@ -1,0 +1,363 @@
+#!/usr/bin/env python3
+
+# Copyright Muxup contributors.
+# Distributed under the terms of the MIT license, see LICENSE for details.
+# SPDX-License-Identifier: MIT
+
+import datetime
+import itertools
+import json
+import os
+import subprocess
+import sys
+import textwrap
+from pathlib import Path
+
+import requests
+from bs4 import BeautifulSoup
+
+### Config ###
+
+
+# Wrapped in a function to workaround Python's lack of support for forward
+# declarations of functions (such as the referenced fetcher functions)
+# fmt: off
+def get_sources():
+    return {
+        "Rust Internals": (discourse_fetcher, "https://internals.rust-lang.org/"),
+        "Swift Evolution": (discourse_fetcher, "https://forums.swift.org/c/evolution/18"),
+        "HN": (feed_fetcher, "https://news.ycombinator.com/rss", True),
+        "lobste.rs": (feed_fetcher, "https://lobste.rs/rss", True),
+        "/r/programminglanguages": (feed_fetcher, "http://www.reddit.com/r/programminglanguages/.rss"),
+        "/r/rust": (feed_fetcher, "http://www.reddit.com/r/rust/top.rss?t=week"),
+        "Muxup": (feed_fetcher, "https://muxup.com/feed.xml"),
+        "Igalia": (feed_fetcher, "https://www.igalia.com/feed.xml"),
+        "cs.PL": (arxiv_fetcher, "cs.PL"),
+        "cs.AR": (arxiv_fetcher, "cs.AR"),
+    }
+# fmt: on
+
+
+# URLs that will be opened unconditionally when performing the 'read' action.
+extra_urls_for_read = ["https://guardian.co.uk"]
+data_dir = Path(
+    os.environ.get("XDG_DATA_HOME", Path.home() / ".local" / "share" / "pwr")
+)
+data_file = data_dir / "data.json"
+preferred_browser = os.environ.get("BROWSER", "firefox")
+saved_seen_url_limit = 250
+fetch_timeout = 10
+read_url_batch_size = 10
+
+### Fetchers ###
+
+# A fetcher is passed whatever arguments were present in the sources
+# dictionary, and is responsible for returning an array of [url, title]
+# arrays. The caller will take care of removing any [url, title] entries where
+# the url has already been seen. A fetcher might append `##someval` to a URL
+# to force it appear fresh (where someval might be a timestamp, number of
+# replies, or some other data).
+
+
+def feed_fetcher(url, comments_as_link=False):
+    soup = BeautifulSoup(fetch_from_url(url), features="xml")
+    entries = soup.find_all(["item", "entry"])
+    extracted = []
+    for entry in entries:
+        title = entry.find("title").text
+        link = entry.find(comments_as_link and "comments" or "link")
+        url = link.get("href") or link.text
+        extracted.append([url, title])
+    return extracted
+
+
+# Custom fetcher rather than just using the RSS feed because the arXiv RSS
+# feeds only include any papers posted in the last day, so it's possible to
+# miss them if you don't fetch regularly enough.
+def arxiv_fetcher(category):
+    url = f"https://arxiv.org/list/{category}/recent"
+    soup = BeautifulSoup(fetch_from_url(url), "html.parser")
+    extracted = []
+
+    for dt in soup.find_all("dt"):
+        title_tag = dt.find_next("div", class_="list-title")
+        title = title_tag.text.replace("Title:", "").strip()
+        abstract = dt.find_next("a", title="Abstract")
+        url = "https://arxiv.org" + abstract["href"]
+        extracted.append([url, title])
+    return extracted
+
+
+# The Discourse RSS feeds don't provide the same listing as when viewing a
+# category sorted by most recently replied to (see
+# <https://meta.discourse.org/t/missing-rss-feed-which-corresponds-to-new-topics/295686>), so extract it ourselves.
+def discourse_fetcher(url):
+    soup = BeautifulSoup(fetch_from_url(url), "html.parser")
+    extracted = []
+
+    topics = soup.find_all("tr", class_="topic-list-item")
+    for topic in topics:
+        title_tag = topic.find("a", class_="title")
+        title = title_tag.text.strip()
+        url = title_tag.get("href")
+        replies = topic.find("span", class_="posts").text.strip()
+        extracted.append([f"{url}##{replies}", f"{title} ({replies} replies)"])
+    return extracted
+
+
+### Helper functions ###
+
+
+def load_data():
+    if data_file.exists():
+        return json.loads(data_file.read_text())
+    return {
+        "last_read": "Never",
+        "last_fetch": "Never",
+        "last_filter": "Never",
+        "sources": {},
+    }
+
+
+def save_data(data):
+    data_file.write_text(json.dumps(data, indent=2))
+
+
+def fetch_from_url(url):
+    print(f"Fetching {url} ...", end="", flush=True)
+    response = requests.get(url, timeout=10)
+    response.raise_for_status()
+    print("DONE")
+    return response.text
+
+
+def get_time():
+    return datetime.datetime.now(datetime.timezone.utc).strftime("%Y-%m-%d %H:%M:%S %Z")
+
+
+def print_help():
+    print("Usage: pwr [action]")
+    print("\nIf no action is given, cycles through read/fetch/filter in sequence.\n")
+    print("Available actions:")
+    print("  read   - Read previously selected/enqueued URls")
+    print("  fetch  - Retrieve new article titles for review")
+    print("  filter - Review article titles and decide which to read")
+    print("  status - Print information about current status")
+
+
+def speedbump(action_name, data):
+    print(f"About to start pwr {action_name}, last run at: {data['last_'+action_name]}")
+    input(f"Press Enter to continue with pwr {action_name}")
+
+
+def get_last_action(data):
+    def date_str_for_op(key):
+        val = data[key]
+        if val == "Never":
+            return "1970-01-01 00:00:00 UTC"
+        return val
+
+    recent_ops = [
+        ("read", date_str_for_op("last_read")),
+        ("fetch", date_str_for_op("last_fetch")),
+        ("filter", date_str_for_op("last_filter")),
+    ]
+    last_action, last_action_datetime = max(recent_ops, key=lambda x: x[1])
+    return (last_action, last_action_datetime)
+
+
+def count_urls(data):
+    return sum(len(source_data["entries"]) for source_data in data["sources"].values())
+
+
+### Action implementations ###
+
+
+def do_read():
+    data = load_data()
+    last_action, _ = get_last_action(data)
+    speedbump("read", data)
+    if last_action != "filter":
+        print(
+            "WARNING: filter is not the most recent action. Did you forget to run it?"
+        )
+        input("Press Enter to continue anyway, or Ctrl-C to abort")
+    urls = extra_urls_for_read.copy()
+
+    for source_data in data["sources"].values():
+        for url, _ in source_data["entries"]:
+            url = url.split("##")[0]
+            if not url.startswith(("http://", "https://")):
+                print(f"Skipping url '{url}' as it doesn't have a recognised protocol")
+                continue
+            urls.append(url)
+        source_data["entries"] = []
+
+    print(
+        f"Launching browser (in batches of {read_url_batch_size}) for {len(urls)} URLs."
+    )
+
+    for url_batch in itertools.batched(urls, read_url_batch_size):
+        print(f"Opening batch of URLs with browser {preferred_browser}")
+        subprocess.Popen([preferred_browser] + list(url_batch))
+        if len(url_batch) == read_url_batch_size:
+            input("Press Enter to continue to next batch")
+
+    print("All URLs read, saving changes")
+    data["last_read"] = get_time()
+    save_data(data)
+    print(f"pwr read ended successfully at {data['last_read']}")
+
+
+def do_fetch():
+    data = load_data()
+    speedbump("fetch", data)
+
+    for source_name, source_info in get_sources().items():
+        if source_name not in data["sources"]:
+            data["sources"][source_name] = {"seen": [], "entries": []}
+        else:
+            # Ensure serialised order of data from fetchers reflects any
+            # changes made to the sources dict order.
+            value = data["sources"].pop(source_name)
+            data["sources"][source_name] = value
+
+        print(f"Processing source {source_name}")
+        func = source_info[0]
+        extracted = func(*source_info[1:])
+
+        saved_source_data = data["sources"][source_name]
+        saved_source_data["seen"] = saved_source_data["seen"][-saved_seen_url_limit:]
+        seen_set = dict.fromkeys(saved_source_data["seen"])
+        filtered_extracted = []
+        for url, title in extracted:
+            if url in seen_set:
+                # Ensure entry in seen_set is refreshed (i.e. affect ordering)
+                seen_set.pop(url)
+            else:
+                filtered_extracted.append([url, title])
+            seen_set[url] = None
+        saved_source_data["seen"] = list(seen_set.keys())
+        saved_source_data["entries"].extend(filtered_extracted)
+        print(
+            f"Retrieved {len(extracted)} items, {len(filtered_extracted)} remain after removing seen items"
+        )
+
+    # Delete data for any sources no longer in the sources list in this
+    # script.
+    sources = get_sources()
+    for source_name in list(data["sources"].keys()):
+        if source_name not in sources:
+            del data["sources"][source_name]
+
+    data["last_fetch"] = get_time()
+    save_data(data)
+    print(f"pwr fetch ended successfully at {data['last_fetch']}")
+
+
+def do_filter():
+    data = load_data()
+    speedbump("filter", data)
+    num_urls_before_filtering = count_urls(data)
+    wrapper = textwrap.TextWrapper(
+        width=98, initial_indent="d ", subsequent_indent="  "
+    )
+    filter_file = data_dir / "filter.pwr"
+
+    with filter_file.open("w") as file:
+        file.write("------------------------------------------------------------\n")
+        file.write(f"Filter file generated at {get_time()}\n")
+        file.write("DO NOT DELETE OR MOVE ANY LINES\n")
+        file.write("To mark an item for reading, replace the 'd' prefix with 'r'\n")
+        file.write("Exit editor with non-zero return code (:cq in vim) to abort\n")
+        file.write("------------------------------------------------------------\n\n")
+        for source_name, source_data in data["sources"].items():
+            if not source_data["entries"]:
+                continue
+            file.write(f"# {source_name}\n")
+            for _, title in source_data["entries"]:
+                file.write(wrapper.fill(title))
+                file.write("\n")
+            file.write("\n")
+
+    result = subprocess.run([os.environ.get("EDITOR", "vim"), filter_file])
+    if result.returncode != 0:
+        print("Exiting early as editor returned non-zero exit code")
+        print("Filtering not applied")
+        sys.exit(1)
+
+    with filter_file.open("r") as file:
+        filtered_entries = []
+        cur_source_name = None
+        index = 0
+
+        for line in file:
+            if line.startswith("# "):
+                new_source_name = line[2:].strip()
+                if new_source_name not in data["sources"]:
+                    raise ValueError(
+                        f"Source {new_source_name} not found in saved json"
+                    )
+                if cur_source_name:
+                    data["sources"][cur_source_name]["entries"] = filtered_entries
+                filtered_entries = []
+                index = 0
+                cur_source_name = new_source_name
+            elif line.startswith("d "):
+                index += 1
+            elif line.startswith("r "):
+                filtered_entries.append(
+                    data["sources"][cur_source_name]["entries"][index]
+                )
+                index += 1
+
+        if cur_source_name:
+            data["sources"][cur_source_name]["entries"] = filtered_entries
+
+    num_urls_after_filtering = count_urls(data)
+    print(
+        f"Filtered {num_urls_before_filtering} entries down to {num_urls_after_filtering} ({num_urls_before_filtering - num_urls_after_filtering} removed)."
+    )
+    data["last_filter"] = get_time()
+    save_data(data)
+    print(f"pwr filter ended successfully at {data['last_filter']}")
+
+
+def do_status():
+    data = load_data()
+    last_action, last_action_datetime = get_last_action(data)
+    print(f"Last operation was '{last_action}' at {last_action_datetime}")
+    print(f"{count_urls(data)} items in entries database")
+
+
+### Main ###
+
+if __name__ == "__main__":
+    data_dir.mkdir(parents=True, exist_ok=True)
+
+    if len(sys.argv) < 2:
+        data = load_data()
+        last_action, _ = get_last_action(data)
+        if last_action != "filter":
+            print(
+                f"Error: argument-less pwr flow only valid when 'filter' was last action (last action: '{last_action}')"
+            )
+            sys.exit(1)
+        do_read()
+        do_fetch()
+        do_filter()
+        sys.exit(0)
+
+    action = sys.argv[1]
+    if action == "read":
+        do_read()
+    elif action == "fetch":
+        do_fetch()
+    elif action == "filter":
+        do_filter()
+    elif action == "status":
+        do_status()
+    else:
+        print(f"Error: Invalid action '{action}'")
+        print_help()
+        sys.exit(1)
