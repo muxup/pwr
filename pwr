@@ -11,6 +11,7 @@ import os
 import subprocess
 import sys
 import textwrap
+import time
 from pathlib import Path
 
 import requests
@@ -123,12 +124,22 @@ def save_data(data):
     data_file.write_text(json.dumps(data, indent=2))
 
 
-def fetch_from_url(url):
-    print(f"Fetching {url} ...", end="", flush=True)
-    response = requests.get(url, timeout=10)
-    response.raise_for_status()
-    print("DONE")
-    return response.text
+def fetch_from_url(url, max_retries=5, delay=1):
+    headers = {"User-Agent": "pwr"}
+    for attempt in range(max_retries):
+        try:
+            print(f"Fetching {url} ...", end="", flush=True)
+            response = requests.get(url, headers=headers, timeout=10)
+            response.raise_for_status()
+            print("DONE")
+            return response.text
+        except requests.exceptions.HTTPError as e:
+            print(f"FAILED {str(e)}")
+            if attempt < max_retries - 1:
+                time.sleep(delay)
+                delay *= 4
+    print("Max retries reached. Giving up.")
+    sys.exit(1)
 
 
 def get_time():
