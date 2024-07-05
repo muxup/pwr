@@ -223,6 +223,7 @@ def do_read():
 def do_fetch():
     data = load_data()
     speedbump("fetch", data)
+    total_filtered_extracted = 0
 
     for source_name, source_info in get_sources().items():
         if source_name not in data["sources"]:
@@ -250,6 +251,7 @@ def do_fetch():
             seen_set[url] = None
         saved_source_data["seen"] = list(seen_set.keys())
         saved_source_data["entries"].extend(filtered_extracted)
+        total_filtered_extracted += len(filtered_extracted)
         print(
             f"Retrieved {len(extracted)} items, {len(filtered_extracted)} remain after removing seen items"
         )
@@ -263,6 +265,9 @@ def do_fetch():
 
     data["last_fetch"] = get_time()
     save_data(data)
+    print(
+        f"\nA total of {total_filtered_extracted} items were queued up for filtering."
+    )
     print(f"pwr fetch ended successfully at {data['last_fetch']}")
 
 
