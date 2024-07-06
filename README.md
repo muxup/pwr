@@ -21,7 +21,7 @@ why it exists and how to use it.
 * Supporting fetching data from multiple sources in parallel is an obvious
   extension. It simply hasn't been slow enough so far to make it worth
   prioritising.
-* Caching of RSS feeds and similar isn't implemented. This is find if you're
+* Caching of RSS feeds and similar isn't implemented. This is fine if you're
   running it once every day or so as intended, but if you're looking to run it
   more regularly you should add improvements in that area.
 * pwr is a quick script that scratches an itch. It's definitely not the
