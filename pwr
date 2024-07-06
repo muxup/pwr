@@ -52,6 +52,7 @@ def get_sources() -> dict[str, tuple[Callable[..., URLAndTitleList], *tuple[obje
         "Igalia": (feed_fetcher, "https://www.igalia.com/feed.xml"),
         "cs.PL": (arxiv_fetcher, "cs.PL"),
         "cs.AR": (arxiv_fetcher, "cs.AR"),
+        "Hylo discussions": (ghdiscussions_fetcher, "orgs/hylo-lang"),
     }
 # fmt: on
 
@@ -121,6 +122,23 @@ def discourse_fetcher(url: str) -> URLAndTitleList:
         url = title_tag.get("href")
         replies = topic.find("span", class_="posts").text.strip()
         extracted.append([f"{url}##{replies}", f"{title} ({replies} replies)"])
+    return extracted
+
+
+def ghdiscussions_fetcher(ghpath: str) -> URLAndTitleList:
+    soup = BeautifulSoup(
+        fetch_from_url(f"https://github.com/{ghpath}/discussions"), "html.parser"
+    )
+    extracted = []
+
+    for topic in soup.find_all("a", attrs={"data-hovercard-type": "discussion"}):
+        title = topic.text.strip()
+        url = f"https://github.com{topic.get('href')}"
+        replies_element = topic.find_next(
+            "a", attrs={"aria-label": lambda x: x and "comment" in x}
+        )
+        replies = replies_element.text.strip()
+        extracted.append([f"{url}##{replies}", title])
     return extracted
 
 
