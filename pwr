@@ -369,6 +369,19 @@ def do_status() -> None:
     print(f"{count_urls(data)} items in entries database")
 
 
+def do_test_fetcher(name: str, args: list[str]) -> None:
+    fetcher_fn = globals().get(f"{name}_fetcher")
+    if not fetcher_fn or not callable(fetcher_fn):
+        print(f"Error: fetcher function '{name}' not found.")
+        sys.exit(1)
+    extracted = fetcher_fn(*args)
+    print(f"{len(extracted)} URL+title pairs extracted:\n")
+    for entry in extracted:
+        print(f"URL: {entry[0]}")
+        print(f"Title: {entry[1]}")
+        print()
+
+
 ### Main ###
 
 if __name__ == "__main__":
@@ -396,6 +409,11 @@ if __name__ == "__main__":
         do_filter()
     elif action == "status":
         do_status()
+    elif action == "test-fetcher":
+        if len(sys.argv) < 3:
+            print("Missing required fetcher name argument.")
+            sys.exit(1)
+        do_test_fetcher(sys.argv[2], sys.argv[3:])
     else:
         print(f"Error: Invalid action '{action}'")
         print_help()
