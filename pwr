@@ -139,7 +139,7 @@ def ghdiscussions_fetcher(ghpath: str) -> URLAndTitleList:
             "a", attrs={"aria-label": lambda x: x and "comment" in x}
         )
         replies = replies_element.text.strip()
-        extracted.append([f"{url}##{replies}", title])
+        extracted.append([f"{url}##{replies}", append_replies(title, int(replies))])
     return extracted
 
 
@@ -152,7 +152,9 @@ def groupsio_fetcher(groupurl: str) -> URLAndTitleList:
         url = link.get("href")
         reply_count_span = topic_span.find("span", class_="hashtag-position")
         reply_count = reply_count_span.text.strip() if reply_count_span else "0"
-        extracted.append([f"{url}##{reply_count}", title])
+        extracted.append(
+            [f"{url}##{reply_count}", append_replies(title, int(reply_count))]
+        )
     return extracted
 
 
