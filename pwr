@@ -54,6 +54,7 @@ def get_sources() -> dict[str, tuple[Callable[..., URLAndTitleList], *tuple[obje
         "cs.AR": (arxiv_fetcher, "cs.AR"),
         "Hylo discussions": (ghdiscussions_fetcher, "orgs/hylo-lang"),
         "RISC-V announcements": (groupsio_fetcher, "https://lists.riscv.org/g/tech-announce/topics"),
+        "Nim forum": (nimforum_fetcher,),
     }
 # fmt: on
 
@@ -154,6 +155,19 @@ def groupsio_fetcher(groupurl: str) -> URLAndTitleList:
         reply_count = reply_count_span.text.strip() if reply_count_span else "0"
         extracted.append(
             [f"{url}##{reply_count}", append_replies(title, int(reply_count))]
+        )
+    return extracted
+
+
+def nimforum_fetcher() -> URLAndTitleList:
+    thread_data = json.loads(fetch_from_url("https://forum.nim-lang.org/threads.json"))
+    extracted = []
+    for thread in thread_data["threads"]:
+        extracted.append(
+            [
+                f"https://forum.nim-lang.org/t/{thread['id']}##{thread['replies']}",
+                append_replies(thread["topic"], thread["replies"]),
+            ]
         )
     return extracted
 
