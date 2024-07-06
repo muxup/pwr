@@ -13,17 +13,34 @@ import sys
 import textwrap
 import time
 from pathlib import Path
+from typing import Callable, TypedDict
 
 import requests
 from bs4 import BeautifulSoup
 
-### Config ###
+### Type definitions ###
 
+URLAndTitleList = list[list[str]]
+
+
+class SourceData(TypedDict):
+    seen: list[str]
+    entries: URLAndTitleList
+
+
+class PWRData(TypedDict):
+    last_read: str
+    last_fetch: str
+    last_filter: str
+    sources: dict[str, SourceData]
+
+
+### Config ###
 
 # Wrapped in a function to workaround Python's lack of support for forward
 # declarations of functions (such as the referenced fetcher functions)
 # fmt: off
-def get_sources():
+def get_sources() -> dict[str, tuple[Callable[..., URLAndTitleList], *tuple[object, ...]]]:
     return {
         "Rust Internals": (discourse_fetcher, "https://internals.rust-lang.org/"),
         "Swift Evolution": (discourse_fetcher, "https://forums.swift.org/c/evolution/18"),
@@ -50,6 +67,7 @@ saved_seen_url_limit = 250
 fetch_timeout = 10
 read_url_batch_size = 10
 
+
 ### Fetchers ###
 
 # A fetcher is passed whatever arguments were present in the sources
@@ -60,7 +78,7 @@ read_url_batch_size = 10
 # replies, or some other data).
 
 
-def feed_fetcher(url, comments_as_link=False):
+def feed_fetcher(url: str, comments_as_link: bool = False) -> URLAndTitleList:
     soup = BeautifulSoup(fetch_from_url(url), features="xml")
     entries = soup.find_all(["item", "entry"])
     extracted = []
@@ -75,7 +93,7 @@ def feed_fetcher(url, comments_as_link=False):
 # Custom fetcher rather than just using the RSS feed because the arXiv RSS
 # feeds only include any papers posted in the last day, so it's possible to
 # miss them if you don't fetch regularly enough.
-def arxiv_fetcher(category):
+def arxiv_fetcher(category: str) -> URLAndTitleList:
     url = f"https://arxiv.org/list/{category}/recent"
     soup = BeautifulSoup(fetch_from_url(url), "html.parser")
     extracted = []
@@ -92,7 +110,7 @@ def arxiv_fetcher(category):
 # The Discourse RSS feeds don't provide the same listing as when viewing a
 # category sorted by most recently replied to (see
 # <https://meta.discourse.org/t/missing-rss-feed-which-corresponds-to-new-topics/295686>), so extract it ourselves.
-def discourse_fetcher(url):
+def discourse_fetcher(url: str) -> URLAndTitleList:
     soup = BeautifulSoup(fetch_from_url(url), "html.parser")
     extracted = []
 
@@ -109,9 +127,9 @@ def discourse_fetcher(url):
 ### Helper functions ###
 
 
-def load_data():
+def load_data() -> PWRData:
     if data_file.exists():
-        return json.loads(data_file.read_text())
+        return json.loads(data_file.read_text())  # type: ignore
     return {
         "last_read": "Never",
         "last_fetch": "Never",
@@ -120,11 +138,11 @@ def load_data():
     }
 
 
-def save_data(data):
+def save_data(data: PWRData) -> None:
     data_file.write_text(json.dumps(data, indent=2))
 
 
-def fetch_from_url(url, max_retries=5, delay=1):
+def fetch_from_url(url: str, max_retries: int = 5, delay: int = 1) -> str:
     headers = {"User-Agent": "pwr"}
     for attempt in range(max_retries):
         try:
@@ -142,11 +160,11 @@ def fetch_from_url(url, max_retries=5, delay=1):
     sys.exit(1)
 
 
-def get_time():
+def get_time() -> str:
     return datetime.datetime.now(datetime.timezone.utc).strftime("%Y-%m-%d %H:%M:%S %Z")
 
 
-def print_help():
+def print_help() -> None:
     print("Usage: pwr [action]")
     print("\nIf no action is given, cycles through read/fetch/filter in sequence.\n")
     print("Available actions:")
@@ -156,17 +174,17 @@ def print_help():
     print("  status - Print information about current status")
 
 
-def speedbump(action_name, data):
-    print(f"About to start pwr {action_name}, last run at: {data['last_'+action_name]}")
+def speedbump(action_name: str, data: PWRData) -> None:
+    print(f"About to start pwr {action_name}, last run at: {data['last_'+action_name]}")  # type: ignore
     input(f"Press Enter to continue with pwr {action_name}")
 
 
-def get_last_action(data):
-    def date_str_for_op(key):
-        val = data[key]
+def get_last_action(data: PWRData) -> tuple[str, str]:
+    def date_str_for_op(key: str) -> str:
+        val = data[key]  # type: ignore
         if val == "Never":
             return "1970-01-01 00:00:00 UTC"
-        return val
+        return val  # type: ignore
 
     recent_ops = [
         ("read", date_str_for_op("last_read")),
@@ -177,14 +195,14 @@ def get_last_action(data):
     return (last_action, last_action_datetime)
 
 
-def count_urls(data):
+def count_urls(data: PWRData) -> int:
     return sum(len(source_data["entries"]) for source_data in data["sources"].values())
 
 
 ### Action implementations ###
 
 
-def do_read():
+def do_read() -> None:
     data = load_data()
     last_action, _ = get_last_action(data)
     speedbump("read", data)
@@ -220,7 +238,7 @@ def do_read():
     print(f"pwr read ended successfully at {data['last_read']}")
 
 
-def do_fetch():
+def do_fetch() -> None:
     data = load_data()
     speedbump("fetch", data)
     total_filtered_extracted = 0
@@ -271,7 +289,7 @@ def do_fetch():
     print(f"pwr fetch ended successfully at {data['last_fetch']}")
 
 
-def do_filter():
+def do_filter() -> None:
     data = load_data()
     speedbump("filter", data)
     num_urls_before_filtering = count_urls(data)
@@ -303,7 +321,7 @@ def do_filter():
         sys.exit(1)
 
     with filter_file.open("r") as file:
-        filtered_entries = []
+        filtered_entries: URLAndTitleList = []
         cur_source_name = None
         index = 0
 
@@ -322,6 +340,11 @@ def do_filter():
             elif line.startswith("d "):
                 index += 1
             elif line.startswith("r "):
+                if not cur_source_name:
+                    raise ValueError(
+                        "Invalid input. 'r ' encountered with no preceding heading."
+                    )
+
                 filtered_entries.append(
                     data["sources"][cur_source_name]["entries"][index]
                 )
@@ -339,7 +362,7 @@ def do_filter():
     print(f"pwr filter ended successfully at {data['last_filter']}")
 
 
-def do_status():
+def do_status() -> None:
     data = load_data()
     last_action, last_action_datetime = get_last_action(data)
     print(f"Last operation was '{last_action}' at {last_action_datetime}")
