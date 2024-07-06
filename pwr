@@ -53,6 +53,7 @@ def get_sources() -> dict[str, tuple[Callable[..., URLAndTitleList], *tuple[obje
         "cs.PL": (arxiv_fetcher, "cs.PL"),
         "cs.AR": (arxiv_fetcher, "cs.AR"),
         "Hylo discussions": (ghdiscussions_fetcher, "orgs/hylo-lang"),
+        "RISC-V announcements": (groupsio_fetcher, "https://lists.riscv.org/g/tech-announce/topics"),
     }
 # fmt: on
 
@@ -139,6 +140,19 @@ def ghdiscussions_fetcher(ghpath: str) -> URLAndTitleList:
         )
         replies = replies_element.text.strip()
         extracted.append([f"{url}##{replies}", title])
+    return extracted
+
+
+def groupsio_fetcher(groupurl: str) -> URLAndTitleList:
+    soup = BeautifulSoup(fetch_from_url(groupurl), "html.parser")
+    extracted = []
+    for topic_span in soup.find_all("span", class_="subject"):
+        link = topic_span.find("a")
+        title = link.text.strip()
+        url = link.get("href")
+        reply_count_span = topic_span.find("span", class_="hashtag-position")
+        reply_count = reply_count_span.text.strip() if reply_count_span else "0"
+        extracted.append([f"{url}##{reply_count}", title])
     return extracted
 
 
