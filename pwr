@@ -197,7 +197,7 @@ def save_data(data: PWRData) -> None:
 
 
 def fetch_from_url(url: str, max_retries: int = 5, delay: int = 1) -> str:
-    headers = {"User-Agent": "pwr"}
+    headers = {"User-Agent": "pwr - paced web reader"}
     for attempt in range(max_retries):
         try:
             print(f"Fetching {url} ...", end="", flush=True)
