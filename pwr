@@ -122,7 +122,7 @@ def discourse_fetcher(url: str) -> URLAndTitleList:
         title = title_tag.text.strip()
         url = title_tag.get("href")
         replies = topic.find("span", class_="posts").text.strip()
-        extracted.append([f"{url}##{replies}", f"{title} ({replies} replies)"])
+        extracted.append([f"{url}##{replies}", append_replies(title, int(replies))])
     return extracted
 
 
@@ -157,6 +157,12 @@ def groupsio_fetcher(groupurl: str) -> URLAndTitleList:
 
 
 ### Helper functions ###
+
+
+def append_replies(title: str, count: int) -> str:
+    if count == 1:
+        return f"{title} (1 reply)"
+    return f"{title} ({count} replies)"
 
 
 def load_data() -> PWRData:
