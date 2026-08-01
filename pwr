@@ -280,11 +280,14 @@ def do_read() -> None:
         f"Launching browser (in batches of {read_url_batch_size}) for {len(urls)} URLs."
     )
 
-    for url_batch in itertools.batched(urls, read_url_batch_size):
+    batches = list(itertools.batched(urls, read_url_batch_size))
+    remaining = len(batches)
+    for url_batch in batches:
         print(f"Opening batch of URLs with browser {preferred_browser}")
         subprocess.Popen([preferred_browser] + list(url_batch))
-        if len(url_batch) == read_url_batch_size:
-            input("Press Enter to continue to next batch")
+        remaining -= 1
+        if remaining:
+            input(f"Press Enter to continue to next batch ({remaining} remaining)")
 
     print("All URLs read, saving changes")
     data["last_read"] = get_time()
