@@ -69,6 +69,7 @@ preferred_browser = os.environ.get("BROWSER", "firefox")
 saved_seen_url_limit = 250
 fetch_timeout = 10
 read_url_batch_size = 10
+http_session = requests.Session()
 
 
 ### Fetchers ###
@@ -201,7 +202,7 @@ def fetch_from_url(url: str, max_retries: int = 5, delay: int = 1) -> str:
     for attempt in range(max_retries):
         try:
             print(f"Fetching {url} ...", end="", flush=True)
-            response = requests.get(url, headers=headers, timeout=10)
+            response = http_session.get(url, headers=headers, timeout=10)
             response.raise_for_status()
             print("DONE")
             return response.text
