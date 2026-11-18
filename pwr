@@ -5,15 +5,18 @@
 # SPDX-License-Identifier: MIT-0
 
 import datetime
+import hashlib
 import itertools
 import json
 import os
+import re
 import subprocess
 import sys
 import textwrap
 import time
 from pathlib import Path
 from typing import Callable, TypedDict
+from urllib.parse import urljoin
 
 import requests
 from bs4 import BeautifulSoup
@@ -150,8 +153,29 @@ def ghdiscussions_fetcher(ghpath: str) -> URLAndTitleList:
     return extracted
 
 
+# groups.io serves a JavaScript /probe page in place of the requested HTML
+# until a cookie is set. The page POSTs a fingerprint hash and timestamp back
+# to /probe to get that cookie.
 def groupsio_fetcher(groupurl: str) -> URLAndTitleList:
-    soup = BeautifulSoup(fetch_from_url(groupurl), "html.parser")
+    html = fetch_from_url(groupurl)
+    if 'id="monocleForm"' in html:
+        ts_match = re.search(r"const ts = (\d+);", html)
+        if not ts_match:
+            print("Error: couldn't find timestamp in groups.io /probe page")
+            sys.exit(1)
+        probe_response = fetch_from_url(
+            urljoin(groupurl, "/probe"),
+            data={"fp": hashlib.sha256(b"pwr").hexdigest(), "ts": ts_match.group(1)},
+        )
+        status = json.loads(probe_response).get("status")
+        if status != "ok":
+            print(f"Error: groups.io /probe completion returned status {status!r}")
+            sys.exit(1)
+        html = fetch_from_url(groupurl)
+        if 'id="monocleForm"' in html:
+            print("Error: still served groups.io /probe page after completing it")
+            sys.exit(1)
+    soup = BeautifulSoup(html, "html.parser")
     extracted = []
     for topic_span in soup.find_all("span", class_="subject"):
         link = topic_span.find("a")
@@ -201,12 +225,21 @@ def save_data(data: PWRData) -> None:
     data_file.write_text(json.dumps(data, indent=2))
 
 
-def fetch_from_url(url: str, max_retries: int = 5, delay: int = 1) -> str:
+# If data is given, it is sent as a form-encoded POST rather than a GET.
+def fetch_from_url(
+    url: str,
+    max_retries: int = 5,
+    delay: int = 1,
+    data: dict[str, str] | None = None,
+) -> str:
     headers = {"User-Agent": "pwr - paced web reader"}
+    method = "GET" if data is None else "POST"
     for attempt in range(max_retries):
         try:
             print(f"Fetching {url} ...", end="", flush=True)
-            response = http_session.get(url, headers=headers, timeout=10)
+            response = http_session.request(
+                method, url, data=data, headers=headers, timeout=10
+            )
             response.raise_for_status()
             print("DONE")
             return response.text
