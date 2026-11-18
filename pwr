@@ -158,11 +158,9 @@ def groupsio_fetcher(groupurl: str) -> URLAndTitleList:
         assert link
         title = link.text.strip()
         url = str(link["href"])
-        reply_count_span = topic_span.find("span", class_="hashtag-position")
-        reply_count = reply_count_span.text.strip() if reply_count_span else "0"
-        extracted.append(
-            [f"{url}##{reply_count}", append_replies(title, int(reply_count))]
-        )
+        badge = topic_span.find("span", class_="hashtag-position")
+        replies = int(next(badge.stripped_strings)) - 1 if badge else 0
+        extracted.append([f"{url}##{replies}", append_replies(title, replies)])
     return extracted
 
 
