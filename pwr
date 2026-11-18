@@ -402,6 +402,7 @@ def do_fetch() -> None:
     data = load_data()
     speedbump("fetch", data)
     total_filtered_extracted = 0
+    empty_sources = []
 
     for source_name, source_info in get_sources().items():
         if source_name not in data["sources"]:
@@ -415,6 +416,8 @@ def do_fetch() -> None:
         print(f"Processing source {source_name}")
         func = source_info[0]
         extracted = func(*source_info[1:])
+        if not extracted:
+            empty_sources.append(source_name)
 
         saved_source_data = data["sources"][source_name]
         saved_source_data["seen"] = saved_source_data["seen"][-saved_seen_url_limit:]
@@ -443,6 +446,8 @@ def do_fetch() -> None:
 
     data["last_fetch"] = get_time()
     save_data(data)
+    if empty_sources:
+        print(f"\nWarning: no items retrieved from {', '.join(empty_sources)}")
     print(
         f"\nA total of {total_filtered_extracted} items were queued up for filtering."
     )
