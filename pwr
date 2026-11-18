@@ -87,10 +87,11 @@ def feed_fetcher(url: str, comments_as_link: bool = False) -> URLAndTitleList:
     entries = soup.find_all(["item", "entry"])
     extracted = []
     for entry in entries:
-        title = entry.find("title").text
+        title_tag = entry.find("title")
         link = entry.find(comments_as_link and "comments" or "link")
-        url = link.get("href") or link.text
-        extracted.append([url, title])
+        assert title_tag and link
+        url = str(link.get("href") or link.text)
+        extracted.append([url, title_tag.text])
     return extracted
 
 
@@ -104,9 +105,10 @@ def arxiv_fetcher(category: str) -> URLAndTitleList:
 
     for dt in soup.find_all("dt"):
         title_tag = dt.find_next("div", class_="list-title")
-        title = title_tag.text.replace("Title:", "").strip()
         abstract = dt.find_next("a", title="Abstract")
-        url = "https://arxiv.org" + abstract["href"]
+        assert title_tag and abstract
+        title = title_tag.text.replace("Title:", "").strip()
+        url = "https://arxiv.org" + str(abstract["href"])
         extracted.append([url, title])
     return extracted
 
@@ -121,9 +123,11 @@ def discourse_fetcher(url: str) -> URLAndTitleList:
     topics = soup.find_all("tr", class_="topic-list-item")
     for topic in topics:
         title_tag = topic.find("a", class_="title")
+        replies_tag = topic.find("span", class_="posts")
+        assert title_tag and replies_tag
         title = title_tag.text.strip()
-        url = title_tag.get("href")
-        replies = topic.find("span", class_="posts").text.strip()
+        url = str(title_tag["href"])
+        replies = replies_tag.text.strip()
         extracted.append([f"{url}##{replies}", append_replies(title, int(replies))])
     return extracted
 
@@ -138,8 +142,9 @@ def ghdiscussions_fetcher(ghpath: str) -> URLAndTitleList:
         title = topic.text.strip()
         url = f"https://github.com{topic.get('href')}"
         replies_element = topic.find_next(
-            "a", attrs={"aria-label": lambda x: x and "comment" in x}
+            "a", attrs={"aria-label": lambda x: x is not None and "comment" in x}
         )
+        assert replies_element
         replies = replies_element.text.strip()
         extracted.append([f"{url}##{replies}", append_replies(title, int(replies))])
     return extracted
@@ -150,8 +155,9 @@ def groupsio_fetcher(groupurl: str) -> URLAndTitleList:
     extracted = []
     for topic_span in soup.find_all("span", class_="subject"):
         link = topic_span.find("a")
+        assert link
         title = link.text.strip()
-        url = link.get("href")
+        url = str(link["href"])
         reply_count_span = topic_span.find("span", class_="hashtag-position")
         reply_count = reply_count_span.text.strip() if reply_count_span else "0"
         extracted.append(
