@@ -10,6 +10,7 @@ import itertools
 import json
 import os
 import re
+import sqlite3
 import subprocess
 import sys
 import textwrap
@@ -20,6 +21,7 @@ from urllib.parse import urljoin
 
 import requests
 from bs4 import BeautifulSoup
+from curl_cffi import requests as cffi_requests
 
 ### Type definitions ###
 
@@ -49,8 +51,8 @@ def get_sources() -> dict[str, tuple[Callable[..., URLAndTitleList], *tuple[obje
         "Swift Evolution": (discourse_fetcher, "https://forums.swift.org/c/evolution/18"),
         "HN": (feed_fetcher, "https://news.ycombinator.com/rss", True),
         "lobste.rs": (feed_fetcher, "https://lobste.rs/rss", True),
-        "/r/programminglanguages": (feed_fetcher, "http://www.reddit.com/r/programminglanguages/.rss"),
-        "/r/rust": (feed_fetcher, "http://www.reddit.com/r/rust/top.rss?t=week"),
+        "/r/programminglanguages": (reddit_fetcher, "/r/programminglanguages"),
+        "/r/rust": (reddit_fetcher, "/r/rust", "week"),
         "Muxup": (feed_fetcher, "https://muxup.com/feed.xml"),
         "Igalia": (feed_fetcher, "https://www.igalia.com/feed.xml"),
         "cs.PL": (arxiv_fetcher, "cs.PL"),
@@ -73,6 +75,7 @@ saved_seen_url_limit = 250
 fetch_timeout = 10
 read_url_batch_size = 10
 http_session = requests.Session()
+reddit_session = None  # Lazily initialised by reddit_fetcher.
 
 
 ### Fetchers ###
@@ -95,6 +98,49 @@ def feed_fetcher(url: str, comments_as_link: bool = False) -> URLAndTitleList:
         assert title_tag and link
         url = str(link.get("href") or link.text)
         extracted.append([url, title_tag.text])
+    return extracted
+
+
+# Sadly, we have to workaround the fact that Reddit has retired their RSS
+# feeds. Use the login cookie from Firefox.
+def reddit_fetcher(subreddit: str, listing: str = "") -> URLAndTitleList:
+    global reddit_session
+    if reddit_session is None:
+        reddit_session = cffi_requests.Session(impersonate="firefox")
+        # This ignores the WAL, so very recent cookie changes may not be seen
+        # until Firefox checkpoints it (e.g. on exit).
+        cookie_db = next(
+            Path.home().glob(".mozilla/firefox/*.default-release/cookies.sqlite")
+        )
+        con = sqlite3.connect(f"file:{cookie_db}?immutable=1", uri=True)
+        for name, value, host in con.execute(
+            "SELECT name, value, host FROM moz_cookies"
+            " WHERE host = 'reddit.com' OR host LIKE '%.reddit.com'"
+        ):
+            reddit_session.cookies.set(name, value, domain=host)
+        con.close()
+    url = f"https://old.reddit.com{subreddit}/"
+    url += {"": "", "new": "new/", "week": "top/?t=week"}[listing]
+
+    def fetch() -> cffi_requests.Response:
+        response = reddit_session.get(url, timeout=10)
+        if response.status_code == 403:  # Login rejected, so don't retry.
+            print("FAILED 403")
+            print("Error: reddit rejected the login, try logging in again in Firefox")
+            sys.exit(1)
+        return response
+
+    html = fetch_with_retries(url, fetch)
+    soup = BeautifulSoup(html, "html.parser")
+    if not soup.select_one("span.user a[href*='/user/']"):
+        print("Error: not logged in to old.reddit.com, log in to reddit in Firefox")
+        sys.exit(1)
+    extracted = []
+    for thing in soup.select("div.thing.link:not(.promoted)"):
+        title_tag = thing.find("a", class_="title")
+        assert title_tag
+        permalink = str(thing["data-permalink"])
+        extracted.append(["https://www.reddit.com" + permalink, title_tag.text.strip()])
     return extracted
 
 
@@ -248,7 +294,7 @@ def fetch_from_url(
 # on failure, and returns the response body.
 def fetch_with_retries(
     url: str,
-    fetch: Callable[[], requests.Response],
+    fetch: Callable[[], requests.Response | cffi_requests.Response],
     max_retries: int = 5,
     delay: int = 1,
 ) -> str:
@@ -259,7 +305,10 @@ def fetch_with_retries(
             response.raise_for_status()
             print("DONE")
             return response.text
-        except requests.exceptions.RequestException as e:
+        except (
+            requests.exceptions.RequestException,
+            cffi_requests.exceptions.RequestException,
+        ) as e:
             print(f"FAILED {str(e)}")
             if attempt < max_retries - 1:
                 time.sleep(delay)
