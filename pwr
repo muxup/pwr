@@ -234,12 +234,28 @@ def fetch_from_url(
 ) -> str:
     headers = {"User-Agent": "pwr - paced web reader"}
     method = "GET" if data is None else "POST"
+    return fetch_with_retries(
+        url,
+        lambda: http_session.request(
+            method, url, data=data, headers=headers, timeout=10
+        ),
+        max_retries,
+        delay,
+    )
+
+
+# Calls fetch to make the request for url, retrying with exponential backoff
+# on failure, and returns the response body.
+def fetch_with_retries(
+    url: str,
+    fetch: Callable[[], requests.Response],
+    max_retries: int = 5,
+    delay: int = 1,
+) -> str:
     for attempt in range(max_retries):
         try:
             print(f"Fetching {url} ...", end="", flush=True)
-            response = http_session.request(
-                method, url, data=data, headers=headers, timeout=10
-            )
+            response = fetch()
             response.raise_for_status()
             print("DONE")
             return response.text
